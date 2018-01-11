@@ -92,6 +92,21 @@ class Brain:
 
         return s_t, a_t, r_t, minimize
 
+    def _loss(self, y_true, y_pred):
+        p, v = y_pred
+        a_t, r_t = y_true
+
+        log_prob = tf.log( tf.reduce_sum(p * a_t, axis=1, keep_dims=True) + 1e-10)
+        advantage = r_t - v
+
+        loss_policy = - log_prob * tf.stop_gradient(advantage)									# maximize policy
+        loss_value  = LOSS_V * tf.square(advantage)												# minimize value error
+        entropy = LOSS_ENTROPY * tf.reduce_sum(p * tf.log(p + 1e-10), axis=1, keep_dims=True)	# maximize entropy (regularization)
+
+        loss_total = tf.reduce_mean(loss_policy + loss_value + entropy)
+
+        return loss_total
+
     def optimize(self):
         if len(self.train_queue[0]) < MIN_BATCH:
             time.sleep(0)	# yield
