@@ -9,20 +9,20 @@ import argparse
 
 # ----- https://github.com/Grzego/async-rl/tree/master/a3c
 parser = argparse.ArgumentParser(description='Training model')
-parser.add_argument('--game', default='Breakout-v0', help='OpenAI gym environment name', dest='game', type=str)
+parser.add_argument('--game', default='CartPole-v0', help='OpenAI gym environment name', dest='game', type=str)
 parser.add_argument('--processes', default=4, help='Number of processes that generate experience for agent',
                     dest='processes', type=int)
 parser.add_argument('--lr', default=0.001, help='Learning rate', dest='learning_rate', type=float)
-parser.add_argument('--steps', default=80000000, help='Number of frames to decay learning rate', dest='steps', type=int)
-parser.add_argument('--batch_size', default=20, help='Batch size to use during training', dest='batch_size', type=int)
+parser.add_argument('--steps', default=80000, help='Number of frames to decay learning rate', dest='steps', type=int)
+parser.add_argument('--batch_size', default=32, help='Batch size to use during training', dest='batch_size', type=int)
 parser.add_argument('--swap_freq', default=100, help='Number of frames before swapping network weights',
                     dest='swap_freq', type=int)
 parser.add_argument('--checkpoint', default=0, help='Frame to resume training', dest='checkpoint', type=int)
-parser.add_argument('--save_freq', default=250000, help='Number of frames before saving weights', dest='save_freq',
+parser.add_argument('--save_freq', default=10000, help='Number of frames before saving weights', dest='save_freq',
                     type=int)
 parser.add_argument('--queue_size', default=256, help='Size of queue holding agent experience', dest='queue_size',
                     type=int)
-parser.add_argument('--n_step', default=5, help='Number of steps', dest='n_step', type=int)
+parser.add_argument('--n_step', default=16, help='Number of steps', dest='n_step', type=int)
 parser.add_argument('--reward_scale', default=1., dest='reward_scale', type=float)
 parser.add_argument('--beta', default=0.01, dest='beta', type=float)
 # -----
@@ -37,10 +37,7 @@ def build_network(input_shape, output_shape):
     from keras.layers import Input, Conv2D, Flatten, Dense
     # -----
     state = Input(shape=input_shape)
-    h = Conv2D(16, kernel_size=(8, 8), strides=(4, 4), activation='relu', data_format='channels_first')(state)
-    h = Conv2D(32, kernel_size=(4, 4), strides=(2, 2), activation='relu', data_format='channels_first')(h)
-    h = Flatten()(h)
-    h = Dense(256, activation='relu')(h)
+    h = Dense(32, activation='relu')(state)
 
     value = Dense(1, activation='linear', name='value')(h)
     policy = Dense(output_shape, activation='softmax', name='policy')(h)
@@ -76,16 +73,15 @@ def value_loss():
 # -----
 
 class LearningAgent(object):
-    def __init__(self, action_space, batch_size=32, screen=(84, 84), swap_freq=200):
+    def __init__(self, observation_space, action_space, batch_size=32, swap_freq=200):
         from keras.optimizers import RMSprop
         # -----
-        self.screen = screen
         self.input_depth = 1
-        self.past_range = 3
-        self.observation_shape = (self.input_depth * self.past_range,) + self.screen
+        self.past_range = 1
+        self.observation_shape = observation_space.shape
         self.batch_size = batch_size
 
-        _, _, self.train_net, adventage = build_network(self.observation_shape, action_space.n)
+        _, _, self.train_net, adventage = build_network(observation_space.shape, action_space.n)
 
         self.train_net.compile(optimizer=RMSprop(epsilon=0.1, rho=0.99),
                                loss=[value_loss(), policy_loss(adventage, args.beta)])
@@ -151,7 +147,7 @@ def learn_proc(mem_queue, weight_dict):
     steps = args.steps
     # -----
     env = gym.make(args.game)
-    agent = LearningAgent(env.action_space, batch_size=args.batch_size, swap_freq=args.swap_freq)
+    agent = LearningAgent(env.observation_space, env.action_space, batch_size=args.batch_size, swap_freq=args.swap_freq)
     # -----
     if checkpoint > 0:
         print(' %5d> Loading weights from file' % (pid,))
@@ -187,13 +183,11 @@ def learn_proc(mem_queue, weight_dict):
 
 
 class ActingAgent(object):
-    def __init__(self, action_space, screen=(84, 84), n_step=8, discount=0.99):
-        self.screen = screen
+    def __init__(self, observation_space, action_space, n_step=8, discount=0.99):
         self.input_depth = 1
-        self.past_range = 3
-        self.observation_shape = (self.input_depth * self.past_range,) + self.screen
-
-        self.value_net, self.policy_net, self.load_net, adv = build_network(self.observation_shape, action_space.n)
+        self.past_range = 1
+        self.observation_shape = observation_space.shape
+        self.value_net, self.policy_net, self.load_net, adv = build_network(observation_space.shape, action_space.n)
 
         self.value_net.compile(optimizer='rmsprop', loss='mse')
         self.policy_net.compile(optimizer='rmsprop', loss='categorical_crossentropy')
@@ -222,7 +216,7 @@ class ActingAgent(object):
 
     def sars_data(self, action, reward, observation, terminal, mem_queue):
         self.save_observation(observation)
-        reward = np.clip(reward, -1., 1.)
+        reward = np.clip(reward, -10., 10.)
         # reward /= args.reward_scale
         # -----
         self.n_step_observations.appendleft(self.last_observations)
@@ -245,11 +239,7 @@ class ActingAgent(object):
 
     def save_observation(self, observation):
         self.last_observations = self.observations[...]
-        self.observations = np.roll(self.observations, -self.input_depth, axis=0)
-        self.observations[-self.input_depth:, ...] = self.transform_screen(observation)
-
-    def transform_screen(self, data):
-        return rgb2gray(imresize(data, self.screen))[None, ...]
+        self.observations = observation
 
 
 def generate_experience_proc(mem_queue, weight_dict, no):
@@ -264,7 +254,7 @@ def generate_experience_proc(mem_queue, weight_dict, no):
     batch_size = args.batch_size
     # -----
     env = gym.make(args.game)
-    agent = ActingAgent(env.action_space, n_step=args.n_step)
+    agent = ActingAgent(env.observation_space, env.action_space, n_step=args.n_step)
 
     if frames > 0:
         print(' %5d> Loaded weights from file' % (pid,))
@@ -298,10 +288,10 @@ def generate_experience_proc(mem_queue, weight_dict, no):
             agent.sars_data(action, reward, observation, done, mem_queue)
             # -----
             op_count = 0 if op_last != action else op_count + 1
-            done = done or op_count >= 100
+            done = done #or op_count >= 100
             op_last = action
             # -----
-            if frames % 2000 == 0:
+            if frames % 1000 == 0:
                 print(' %5d> Best: %4d; Avg: %6.2f; Max: %4d' % (
                     pid, best_score, np.mean(avg_score), np.max(avg_score)))
             if frames % batch_size == 0:
