@@ -12,13 +12,13 @@ parser = argparse.ArgumentParser(description='Training model')
 parser.add_argument('--game', default='CartPole-v0', help='OpenAI gym environment name', dest='game', type=str)
 parser.add_argument('--processes', default=4, help='Number of processes that generate experience for agent',
                     dest='processes', type=int)
-parser.add_argument('--lr', default=0.001, help='Learning rate', dest='learning_rate', type=float)
+parser.add_argument('--lr', default=0.002, help='Learning rate', dest='learning_rate', type=float)
 parser.add_argument('--steps', default=80000, help='Number of frames to decay learning rate', dest='steps', type=int)
 parser.add_argument('--batch_size', default=32, help='Batch size to use during training', dest='batch_size', type=int)
 parser.add_argument('--swap_freq', default=100, help='Number of frames before swapping network weights',
                     dest='swap_freq', type=int)
 parser.add_argument('--checkpoint', default=0, help='Frame to resume training', dest='checkpoint', type=int)
-parser.add_argument('--save_freq', default=10000, help='Number of frames before saving weights', dest='save_freq',
+parser.add_argument('--save_freq', default=100000, help='Number of frames before saving weights', dest='save_freq',
                     type=int)
 parser.add_argument('--queue_size', default=256, help='Size of queue holding agent experience', dest='queue_size',
                     type=int)
@@ -115,10 +115,10 @@ class LearningAgent(object):
         self.entropy.append(entropy)
         self.values.append(np.mean(values))
         min_val, max_val, avg_val = min(self.values), max(self.values), np.mean(self.values)
-        print('\rFrames: %8d; Policy-Loss: %10.6f; Avg: %10.6f '
-              '--- Value-Loss: %10.6f; Avg: %10.6f '
-              '--- Entropy: %7.6f; Avg: %7.6f '
-              '--- V-value; Min: %6.3f; Max: %6.3f; Avg: %6.3f' % (
+        print('\rF: %8d; pL: %5.1f; Avg: %5.1f '
+              '- vL: %6.1f; Avg: %6.1f '
+              '- e: %2.1f; Avg: %2.1f '
+              '- V: Min: %4.1f; Max: %4.1f; Avg: %4.1f' % (
                   self.counter,
                   loss[2], np.mean(self.pol_loss),
                   loss[1], np.mean(self.val_loss),
@@ -216,7 +216,7 @@ class ActingAgent(object):
 
     def sars_data(self, action, reward, observation, terminal, mem_queue):
         self.save_observation(observation)
-        reward = np.clip(reward, -10., 10.)
+        reward = np.clip(reward, -1., 1.)
         # reward /= args.reward_scale
         # -----
         self.n_step_observations.appendleft(self.last_observations)
@@ -292,7 +292,7 @@ def generate_experience_proc(mem_queue, weight_dict, no):
             op_last = action
             # -----
             if frames % 1000 == 0:
-                print(' %5d> Best: %4d; Avg: %6.2f; Max: %4d' % (
+                print(' %5d> B: %4d; A: %4; M: %4d' % (
                     pid, best_score, np.mean(avg_score), np.max(avg_score)))
             if frames % batch_size == 0:
                 update = weight_dict.get('update', 0)
