@@ -6,6 +6,7 @@ import gym
 import numpy as np
 import h5py
 import argparse
+import random
 
 # ----- https://github.com/Grzego/async-rl/tree/master/a3c
 parser = argparse.ArgumentParser(description='Training model')
@@ -15,7 +16,7 @@ parser.add_argument('--processes', default=4, help='Number of processes that gen
 parser.add_argument('--lr', default=0.001, help='Learning rate', dest='learning_rate', type=float)
 parser.add_argument('--steps', default=80000, help='Number of frames to decay learning rate', dest='steps', type=int)
 parser.add_argument('--batch_size', default=32, help='Batch size to use during training', dest='batch_size', type=int)
-parser.add_argument('--swap_freq', default=100, help='Number of frames before swapping network weights',
+parser.add_argument('--swap_freq', default=320, help='Number of frames before swapping network weights',
                     dest='swap_freq', type=int)
 parser.add_argument('--checkpoint', default=0, help='Frame to resume training', dest='checkpoint', type=int)
 parser.add_argument('--save_freq', default=10000, help='Number of frames before saving weights', dest='save_freq',
@@ -202,39 +203,63 @@ class ActingAgent(object):
         self.n_step_rewards = deque(maxlen=n_step)
         self.n_step = n_step
         self.discount = discount
-        self.counter = 0
+        self.n_step_r = 0
+        self.n_discount = self.discount ** n_step
+        self.i_discount = 1.0
 
     def init_episode(self, observation):
         for _ in range(self.past_range):
             self.save_observation(observation)
 
     def reset(self):
-        self.counter = 0
+        self.n_step_r = 0
+        self.i_discount = 1.0
         self.n_step_observations.clear()
         self.n_step_actions.clear()
         self.n_step_rewards.clear()
 
     def sars_data(self, action, reward, observation, terminal, mem_queue):
-        self.save_observation(observation)
+        #self.save_observation(observation)
         reward = np.clip(reward, -10., 10.)
         # reward /= args.reward_scale
         # -----
-        self.n_step_observations.appendleft(self.last_observations)
-        self.n_step_actions.appendleft(action)
-        self.n_step_rewards.appendleft(reward)
-        # -----
-        self.counter += 1
-        if terminal or self.counter >= self.n_step:
+
+        if len(self.n_step_rewards) >= self.n_step:
             r = 0.
             if not terminal:
-                r = self.value_net.predict(self.observations[None, ...])[0]
-            for i in range(self.counter):
-                r = self.n_step_rewards[i] + self.discount * r
-                mem_queue.put((self.n_step_observations[i], self.n_step_actions[i], r))
+                r = self.value_net.predict(observation[None, ...])[0]
+
+            head_observation = self.n_step_observations.popleft()
+            head_action = self.n_step_actions.popleft()
+            head_reward = self.n_step_rewards.popleft()
+            mem_queue.put((head_observation, head_action, self.n_step_r + r * self.n_discount))
+            self.n_step_r = (self.n_step_r - head_reward) / self.discount
+
+        self.n_step_observations.append(observation[...])
+        self.n_step_actions.append(action)
+        self.n_step_rewards.append(reward)
+        self.n_step_r += reward * self.i_discount
+
+        # -----
+        #self.counter += 1
+        if terminal:
+            while len(self.n_step_rewards) > 0:
+                head_observation = self.n_step_observations.popleft()
+                head_action = self.n_step_actions.popleft()
+                head_reward = self.n_step_rewards.popleft()
+                mem_queue.put((head_observation, head_action, self.n_step_r))
+                self.n_step_r = (self.n_step_r - head_reward) / self.discount
+
             self.reset()
 
-    def choose_action(self):
-        policy = self.policy_net.predict(self.observations[None, ...])[0]
+        if len(self.n_step_rewards) < self.n_step:
+            self.i_discount *= self.discount
+
+    def choose_action(self, observations):
+        if random.random() < .1:
+            return random.randint(0, self.action_space.n-1)
+
+        policy = self.policy_net.predict(observations[None, ...])[0]
         return np.random.choice(np.arange(self.action_space.n), p=policy)
 
     def save_observation(self, observation):
@@ -275,13 +300,13 @@ def generate_experience_proc(mem_queue, weight_dict, no):
         episode_reward = 0
         op_last, op_count = 0, 0
         observation = env.reset()
-        agent.init_episode(observation)
+        #agent.init_episode(observation)
 
         # -----
         while not done:
             frames += 1
-            action = agent.choose_action()
-            observation, reward, done, _ = env.step(action)
+            action = agent.choose_action(observation)
+            next_observation, reward, done, _ = env.step(action)
             episode_reward += reward
             best_score = max(best_score, episode_reward)
             # -----
@@ -292,7 +317,7 @@ def generate_experience_proc(mem_queue, weight_dict, no):
             op_last = action
             # -----
             if frames % 1000 == 0:
-                print(' %5d> Best: %4d; Avg: %6.2f; Max: %4d' % (
+                print(' %5d> Best: %4d; Avg: %4d; Max: %4d' % (
                     pid, best_score, np.mean(avg_score), np.max(avg_score)))
             if frames % batch_size == 0:
                 update = weight_dict.get('update', 0)
@@ -300,6 +325,8 @@ def generate_experience_proc(mem_queue, weight_dict, no):
                     last_update = update
                     # print(' %5d> Getting weights from dict' % (pid,))
                     agent.load_net.set_weights(weight_dict['weights'])
+
+            observation = next_observation
         # -----
         avg_score.append(episode_reward)
 
