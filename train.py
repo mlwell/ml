@@ -13,15 +13,15 @@ parser = argparse.ArgumentParser(description='Training model')
 parser.add_argument('--game', default='CartPole-v0', help='OpenAI gym environment name', dest='game', type=str)
 parser.add_argument('--processes', default=4, help='Number of processes that generate experience for agent',
                     dest='processes', type=int)
-parser.add_argument('--lr', default=0.001, help='Learning rate', dest='learning_rate', type=float)
-parser.add_argument('--steps', default=80000, help='Number of frames to decay learning rate', dest='steps', type=int)
+parser.add_argument('--lr', default=0.002, help='Learning rate', dest='learning_rate', type=float)
+parser.add_argument('--steps', default=800000, help='Number of frames to decay learning rate', dest='steps', type=int)
 parser.add_argument('--batch_size', default=32, help='Batch size to use during training', dest='batch_size', type=int)
-parser.add_argument('--swap_freq', default=320, help='Number of frames before swapping network weights',
+parser.add_argument('--swap_freq', default=32, help='Number of frames before swapping network weights',
                     dest='swap_freq', type=int)
 parser.add_argument('--checkpoint', default=0, help='Frame to resume training', dest='checkpoint', type=int)
-parser.add_argument('--save_freq', default=10000, help='Number of frames before saving weights', dest='save_freq',
+parser.add_argument('--save_freq', default=100000, help='Number of frames before saving weights', dest='save_freq',
                     type=int)
-parser.add_argument('--queue_size', default=256, help='Size of queue holding agent experience', dest='queue_size',
+parser.add_argument('--queue_size', default=2560, help='Size of queue holding agent experience', dest='queue_size',
                     type=int)
 parser.add_argument('--n_step', default=16, help='Number of steps', dest='n_step', type=int)
 parser.add_argument('--reward_scale', default=1., dest='reward_scale', type=float)
@@ -56,8 +56,8 @@ def policy_loss(adventage=0., beta=0.01):
     from keras import backend as K
 
     def loss(y_true, y_pred):
-        return -K.sum(K.log(K.sum(y_true * y_pred, axis=-1) + K.epsilon()) * K.flatten(adventage)) + \
-               beta * K.sum(y_pred * K.log(y_pred + K.epsilon()))
+        return -K.mean(K.log(K.sum(y_true * y_pred, axis=-1) + K.epsilon()) * K.flatten(adventage)) + \
+               beta * K.mean(y_pred * K.log(y_pred + K.epsilon()))
 
     return loss
 
@@ -66,7 +66,7 @@ def value_loss():
     from keras import backend as K
 
     def loss(y_true, y_pred):
-        return 0.5 * K.sum(K.square(y_true - y_pred))
+        return 0.5 * K.mean(K.square(y_true - y_pred))
 
     return loss
 
@@ -84,7 +84,7 @@ class LearningAgent(object):
 
         _, _, self.train_net, adventage = build_network(observation_space.shape, action_space.n)
 
-        self.train_net.compile(optimizer=RMSprop(epsilon=0.1, rho=0.99),
+        self.train_net.compile(optimizer=RMSprop(epsilon=1e-10, rho=0.99),
                                loss=[value_loss(), policy_loss(adventage, args.beta)])
 
         self.pol_loss = deque(maxlen=25)
@@ -110,21 +110,21 @@ class LearningAgent(object):
         self.targets[self.unroll, actions] = 1.
         # -----
         loss = self.train_net.train_on_batch([last_observations, adventage], [rewards, self.targets])
-        entropy = np.mean(-policy * np.log(policy + 0.00000001))
+        entropy = np.mean(-policy * np.log(policy + 1e-10))
         self.pol_loss.append(loss[2])
         self.val_loss.append(loss[1])
         self.entropy.append(entropy)
         self.values.append(np.mean(values))
         min_val, max_val, avg_val = min(self.values), max(self.values), np.mean(self.values)
-        print('\rFrames: %8d; Policy-Loss: %10.6f; Avg: %10.6f '
-              '--- Value-Loss: %10.6f; Avg: %10.6f '
-              '--- Entropy: %7.6f; Avg: %7.6f '
-              '--- V-value; Min: %6.3f; Max: %6.3f; Avg: %6.3f' % (
+        print('\rFrames: %8d; Policy-Loss:Avg: %10.6f '
+              '--- Value-Loss:Avg: %10.6f '
+              '--- Entropy:Avg: %7.6f '
+              '--- V-value:Max: %6.3f' % (
                   self.counter,
-                  loss[2], np.mean(self.pol_loss),
-                  loss[1], np.mean(self.val_loss),
-                  entropy, np.mean(self.entropy),
-                  min_val, max_val, avg_val), end='')
+                  np.mean(self.pol_loss),
+                  np.mean(self.val_loss),
+                  np.mean(self.entropy),
+                  max_val), end='')
         # -----
         self.swap_counter -= frames
         if self.swap_counter < 0:
@@ -170,7 +170,7 @@ def learn_proc(mem_queue, weight_dict):
         last_obs[idx, ...], actions[idx], rewards[idx] = mem_queue.get()
         idx = (idx + 1) % batch_size
         if idx == 0:
-            lr = max(0.00000001, (steps - agent.counter) / steps * learning_rate)
+            lr = max(0.001, (steps - agent.counter) / steps * learning_rate)
             updated = agent.learn(last_obs, actions, rewards, learning_rate=lr)
             if updated:
                 # print(' %5d> Updating weights in dict' % (pid,))
