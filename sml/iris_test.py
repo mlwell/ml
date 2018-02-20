@@ -49,8 +49,8 @@ def load_data(label_name='Species'):
 
 (train_feature, train_label), (test_feature, test_label) = load_data()
 from keras.utils import to_categorical
-train_label = to_categorical(train_label)
-test_label = to_categorical(test_label)
+#train_label = to_categorical(train_label)
+#test_label = to_categorical(test_label)
 
 #train_label = np.eye(3)[train_label]
 #test_label = np.eye(3)[test_label]
@@ -63,12 +63,12 @@ model.add(Dense(8, activation='relu'))
 
 model.add(Dense(3, activation='sigmoid'))
 
-model.compile(loss='categorical_crossentropy',
+model.compile(loss='sparse_categorical_crossentropy',
               optimizer=RMSprop(epsilon=1e-10, rho=0.9, lr=0.001),
               metrics=['accuracy'])
 
 model.fit(train_feature, train_label, batch_size=8, epochs=100)
-score = model.evaluate(test_feature, test_label, batch_size=1)
+score = model.evaluate(test_feature, test_label, batch_size=30)
 
 print ("score", score)
 
